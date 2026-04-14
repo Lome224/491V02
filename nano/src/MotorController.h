@@ -49,19 +49,21 @@ class MotorController {
     MotorState nextState(unsigned long nowMs) const;
     void enterState(MotorState nextState, unsigned long nowMs);
     float speedScale(unsigned long nowMs) const;
-    void emitStepPulse_() const;
     bool isStepping() const {
         return status_.state == MotorState::Running || status_.state == MotorState::RampDown ||
                status_.state == MotorState::RampUp;
     }
 
     MotorStatus status_;
-    unsigned long lastStepTimeUs_ = 0;
     bool pendingDirectionFlip_ = false;
     // FSM: current state + timing for the active state.
     unsigned long stateStartMs_ = 0;
     unsigned long stateDeadlineMs_ = 0;
     unsigned long nextStateDurationMs_ = 0;
+    // Smooths knob-driven interval changes while in Running state so that
+    // aggressive twists (e.g. min → max) slew in over ~3τ instead of lurching.
+    float smoothedBaseIntervalUs_ = 0.0f;
+    unsigned long lastUpdateMs_ = 0;
 };
 
 const __FlashStringHelper* toString(MotorState state);
