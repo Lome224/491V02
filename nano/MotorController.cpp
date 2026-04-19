@@ -166,6 +166,12 @@ void MotorController::triggerPause() {
     }
 
     auto nowMs = millis();
+    // Cooldown: once Running, ignore pause requests until we've been running
+    // long enough. Avoids a stale trigger firing right after the last pause.
+    if (status_.state == MotorState::Running &&
+        nowMs - stateStartMs_ < config::kPauseMinIntervalMs) {
+        return;
+    }
     nextStateDurationMs_ = random(config::kPauseMinMs, config::kPauseMaxMs);
     enterState(MotorState::RampDown, nowMs);
 }

@@ -26,6 +26,7 @@ class VL53L0XInput {
 
    private:
     void resetStates();  // internal use only, does not reset the sensor
+    void reinit();       // re-runs sensor init + clears history after prolonged timeouts
     void insertHistory(uint16_t distance);
     bool validReading(uint16_t distance) const;
 
@@ -33,6 +34,7 @@ class VL53L0XInput {
     bool initialized_ = false;
     bool timeout_ = false;
     uint16_t distanceMm_ = 0;
+    uint8_t consecutiveBadReads_ = 0;  // timeouts or out-of-range; both feed recovery
 
     // Min-detection state
     uint16_t history_[config::kVl53l0xDetectHistoryWindow] = {};

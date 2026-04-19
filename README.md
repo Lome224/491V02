@@ -1,72 +1,67 @@
 # Lorem Ipsum
 
-This repo is split into three simple parts:
+Single-board motor controller running on an Arduino Nano plus supporting
+Python / Max MSP tooling on the host.
 
-- `src/`: existing Python sensor and OSC code
-- `mega/`: Arduino Mega PlatformIO project
-- `esp8266/`: ESP8266 PlatformIO project plus backups and probe notes
-- `nano/`: Arduino Nano PlatformIO project using the same motor-controller firmware layout
+## Repo layout
 
-## Quick Start
+```text
+.
+├── nano/              Arduino Nano firmware (flat — no extra src/ subfolder)
+├── src/               Host-side Python + Max MSP patches (Master.py, SynthOG.maxpat, ...)
+├── scripts/           Helper scripts (port discovery, serial monitor)
+├── HARDWARE.md   Pinout, wiring, and control-flow diagrams
+├── platformio.ini     PlatformIO project (builds from repo root)
+└── justfile           All common commands
+```
 
-Run this once after cloning or whenever the Python env changes:
+## Firmware quick start
+
+```bash
+just ports             # list USB serial devices, mark the best-guess Nano
+just build             # compile
+just upload            # compile + flash (reads BOARD_PORT from .env)
+just monitor           # open a serial monitor at 115200 baud
+just upload_monitor    # upload, wait for reset, then monitor
+```
+
+The port lives in `.env` as `BOARD_PORT=/dev/cu.usbserial-210`. If the device
+ever moves, run `just ports` and update that one line. Any recipe also accepts
+a one-off override: `just upload port=/dev/cu.usbserial-123`.
+
+Firmware tuning (pins, ramp times, ToF thresholds, telemetry) lives in
+[nano/Config.h](nano/Config.h). Edit, `just upload`, done. See
+[HARDWARE.md](HARDWARE.md) for the wiring diagram and how the
+control logic fits together.
+
+## Python side
+
+Run once after cloning or when `environment.yml` changes:
 
 ```bash
 just py_setup
 ```
 
-After that, use `just ...` directly. You do not need to activate the env for the repo commands because the Python recipes use `conda run -n lorem-ipsum ...` internally.
-
-If you want an interactive Python shell yourself, activate it manually with:
+Recipes use `conda run -n lorem-ipsum ...` internally, so you do not have
+to activate the env for repo commands. For an interactive shell:
 
 ```bash
 conda activate lorem-ipsum
 ```
 
-Python tools:
+Entry points:
 
 ```bash
-just py_check
-just py_master
-just py_osc_server
+just py_check       # verify the env imports cleanly
+just py_master      # run src/Master.py
+just py_osc_server  # run src/osc_server.py
 ```
-
-Firmware tools:
-
-```bash
-just ports
-just build mega
-just upload mega
-just monitor mega
-
-just build nano
-just upload nano
-just monitor nano
-just probe nano
-
-just build esp8266
-just probe esp8266
-just upload esp8266
-just monitor esp8266
-just upload_monitor esp8266
-just backup esp8266
-just restore esp8266
-```
-
-## VS Code / PlatformIO
-
-Open `mega/`, `nano/`, or `esp8266/` directly in VS Code when you want the full PlatformIO experience.
-
-From the repo root, the `just` commands wrap the same workflows without extra setup.
 
 ## Notes
 
-- Serial ports are detected by `scripts/detect_board_ports.py`.
-- `just ports` shows USB serial candidates and marks positive ESP detections.
-- The root firmware commands accept a board name and an optional explicit port. The board name now maps directly to the folder name and PlatformIO project for that board.
-- ESP auto-detection is positive because it probes with `esptool`. Other USB serial adapters are treated more conservatively and may require a manual port the first time.
-- `.env` is local-only and ignored by git. Use `.env.example` as the shape of that file.
+- `.env` is local-only and ignored by git. Use `.env.example` as its shape.
 - On macOS, prefer `/dev/cu.*` over `/dev/tty.*` for uploads and monitors.
-- `src/` was left untouched.
-- `esp8266/backups/` was kept in place.
+- `just monitor` uses `scripts/serial_monitor.py` (a small termios-based
+  monitor) instead of PlatformIO's built-in one, because PlatformIO's
+  monitor is flaky on this macOS setup.
 - `environment.yml` and `requirements.txt` keep the Python side reproducible.

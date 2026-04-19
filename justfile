@@ -1,19 +1,22 @@
 set shell := ["zsh", "-cu"]
 set dotenv-load := true
 
+project_root := justfile_directory()
 project_env := env_var_or_default("PROJECT_ENV", "lorem-ipsum")
-project_env_file := "environment.yml"
-project_requirements := "requirements.txt"
-serial_env_file := ".env"
-port_detect_script := "scripts/detect_board_ports.py"
+project_env_file := project_root + "/environment.yml"
+project_requirements := project_root + "/requirements.txt"
+port_detect_script := project_root + "/scripts/detect_board_ports.py"
+serial_monitor_script := project_root + "/scripts/serial_monitor.py"
 serial_default_baud := env_var_or_default("SERIAL_DEFAULT_BAUD", "115200")
 serial_settle_delay := env_var_or_default("SERIAL_SETTLE_DELAY", "2")
-default_flash_backup_size := env_var_or_default("BOARD_FLASH_BACKUP_SIZE", "0x400000")
+# Fallback when BOARD_PORT isn't set. Override by editing .env or passing
+# `port=/dev/...` to any firmware recipe.
+default_port := env_var_or_default("BOARD_PORT", "/dev/cu.usbserial-210")
 
 help:
     @just --list
 
-# Python environment and app helpers.
+# --- Python environment and app helpers --------------------------------------
 py_setup:
     @base="$(conda info --base)"; \
     if [ -d "$base/envs/{{ project_env }}" ]; then \
@@ -23,7 +26,7 @@ py_setup:
     fi
 
 py_check:
-    @conda run -n "{{ project_env }}" python -c "import esptool, serial; from pythonosc import dispatcher, osc_server, udp_client; print('Python env OK')"
+    @conda run -n "{{ project_env }}" python -c "import serial; from pythonosc import dispatcher, osc_server, udp_client; print('Python env OK')"
 
 py_master args="":
     @conda run -n "{{ project_env }}" python src/Master.py {{ args }}
@@ -34,73 +37,34 @@ py_osc_server:
 pip_install:
     @python3 -m pip install -r "{{ project_requirements }}"
 
-# Firmware discovery.
-ports board="":
-    @python3 "{{ port_detect_script }}" --write "{{ serial_env_file }}" --project-env "{{ project_env }}" list "{{ board }}"
-    @printf '\nPlatformIO ports\n'
-    @pio device list
-    @printf '\nArduino CLI ports\n'
-    @arduino-cli board list
+# --- Firmware (Arduino Nano) -------------------------------------------------
 
-# Unified firmware workflow.
-build board:
-    @project_dir="$(python3 "{{ port_detect_script }}" project "{{ board }}")"; \
-    env_name="$(python3 "{{ port_detect_script }}" env "{{ board }}")"; \
-    pio run -d "${project_dir}" -e "${env_name}"
+# Show USB serial candidates and mark the best-guess Nano port.
+ports:
+    @python3 "{{ port_detect_script }}" list
 
-rebuild board:
-    @project_dir="$(python3 "{{ port_detect_script }}" project "{{ board }}")"; \
-    env_name="$(python3 "{{ port_detect_script }}" env "{{ board }}")"; \
-    pio run -d "${project_dir}" -e "${env_name}" --target clean; \
-    pio run -d "${project_dir}" -e "${env_name}"
+# Print the auto-detected Nano port (exits non-zero if ambiguous).
+guess_port:
+    @python3 "{{ port_detect_script }}" guess
 
-upload board port="":
-    @project_dir="$(python3 "{{ port_detect_script }}" project "{{ board }}")"; \
-    env_name="$(python3 "{{ port_detect_script }}" env "{{ board }}")"; \
-    resolved_port="$(python3 "{{ port_detect_script }}" --write "{{ serial_env_file }}" --project-env "{{ project_env }}" resolve "{{ board }}" --port "{{ port }}")"; \
-    pio run -d "${project_dir}" -e "${env_name}" -t upload --upload-port "${resolved_port}"
+build:
+    @pio run -d "{{ project_root }}"
 
-monitor board port="" baud=serial_default_baud:
-    @project_dir="$(python3 "{{ port_detect_script }}" project "{{ board }}")"; \
-    env_name="$(python3 "{{ port_detect_script }}" env "{{ board }}")"; \
-    resolved_port="$(python3 "{{ port_detect_script }}" --write "{{ serial_env_file }}" --project-env "{{ project_env }}" resolve "{{ board }}" --port "{{ port }}")"; \
-    pio device monitor -d "${project_dir}" -e "${env_name}" -p "${resolved_port}" -b "{{ baud }}" --no-reconnect
+rebuild:
+    @pio run -d "{{ project_root }}" --target clean
+    @pio run -d "{{ project_root }}"
 
-probe board port="":
-    @python3 "{{ port_detect_script }}" --write "{{ serial_env_file }}" --project-env "{{ project_env }}" probe "{{ board }}" --port "{{ port }}"
+upload port=default_port:
+    @pio run -d "{{ project_root }}" -t upload --upload-port "{{ port }}"
 
-upload_monitor board port="" baud=serial_default_baud delay=serial_settle_delay:
-    @just upload "{{ board }}" "{{ port }}"
+monitor port=default_port baud=serial_default_baud:
+    @if [ ! -e "{{ port }}" ]; then \
+      echo "Port {{ port }} does not exist. Run 'just ports' to find the current one and update .env."; \
+      exit 1; \
+    fi
+    @exec python3 "{{ serial_monitor_script }}" "{{ port }}" --baud "{{ baud }}"
+
+upload_monitor port=default_port baud=serial_default_baud delay=serial_settle_delay:
+    @just upload "{{ port }}"
     @sleep "{{ delay }}"
-    @just monitor "{{ board }}" "{{ port }}" "{{ baud }}"
-
-backup board port="" output="" size="":
-    @family="$(python3 "{{ port_detect_script }}" family "{{ board }}")"; \
-    if [ "${family}" != "esp8266" ]; then \
-      echo "Backup is currently only supported for ESP8266 boards."; \
-      exit 1; \
-    fi; \
-    output_path="{{ output }}"; \
-    if [ -z "${output_path}" ]; then \
-      output_path="{{ board }}/backups/{{ board }}_flash_backup_$$(date +%F).bin"; \
-    fi; \
-    flash_size="{{ size }}"; \
-    if [ -z "${flash_size}" ]; then \
-      flash_size="{{ default_flash_backup_size }}"; \
-    fi; \
-    mkdir -p "$$(dirname "${output_path}")"; \
-    resolved_port="$(python3 "{{ port_detect_script }}" --write "{{ serial_env_file }}" --project-env "{{ project_env }}" resolve "{{ board }}" --port "{{ port }}")"; \
-    conda run -n "{{ project_env }}" python -m esptool --port "${resolved_port}" --chip esp8266 read_flash 0x000000 "${flash_size}" "${output_path}"
-
-restore board port="" input="":
-    @family="$(python3 "{{ port_detect_script }}" family "{{ board }}")"; \
-    if [ "${family}" != "esp8266" ]; then \
-      echo "Restore is currently only supported for ESP8266 boards."; \
-      exit 1; \
-    fi; \
-    if [ -z "{{ input }}" ]; then \
-      echo "Pass the backup image path explicitly, for example: just restore {{ board }} input={{ board }}/backups/<file>.bin"; \
-      exit 1; \
-    fi; \
-    resolved_port="$(python3 "{{ port_detect_script }}" --write "{{ serial_env_file }}" --project-env "{{ project_env }}" resolve "{{ board }}" --port "{{ port }}")"; \
-    conda run -n "{{ project_env }}" python -m esptool --port "${resolved_port}" --chip esp8266 write_flash 0x000000 "{{ input }}"
+    @just monitor "{{ port }}" "{{ baud }}"

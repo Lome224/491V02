@@ -13,6 +13,9 @@ void VL53L0XInput::resetStates() {
     historyIndex_ = 0;
     historyCount_ = 0;
     reachedMinLatch_ = false;
+    consecutiveBadReads_ = 0;
+    movingCloser_ = false;
+    turningMs = 0;
 
     for (size_t i = 0; i < config::kVl53l0xDetectHistoryWindow; ++i) {
         history_[i] = 0;
@@ -23,6 +26,7 @@ void VL53L0XInput::resetStates() {
 
 bool VL53L0XInput::begin() {
     Wire.begin();
+    Wire.setClock(100000); // VL53L0X can be picky about I2C timing; 100kHz is more stable than the default 400kHz on Nano
 
     sensor_.setTimeout(config::kVl53l0xTimeoutMs);
     if (!sensor_.init()) {
@@ -40,14 +44,20 @@ bool VL53L0XInput::begin() {
 void VL53L0XInput::insertHistory(uint16_t distance) {
     history_[historyIndex_] = distance;
 
-    // New median
+    // Median over the most recent valid raw samples. Skipping invalid/empty
+    // slots prevents a dropped reading (e.g. a missed sample during EMI)
+    // from pulling the median toward zero during warmup or recovery.
     uint16_t sorted[config::kVl53l0xMedianCycles] = {};
+    uint8_t medianValid = 0;
     for (size_t i = 0; i < config::kVl53l0xMedianCycles; ++i) {
-        sorted[i] =
-            history_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) % config::kVl53l0xDetectHistoryWindow];
+        const uint16_t v = history_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
+                                    config::kVl53l0xDetectHistoryWindow];
+        if (validReading(v)) {
+            sorted[medianValid++] = v;
+        }
     }
-    for (size_t i = 0; i < config::kVl53l0xMedianCycles - 1; ++i) {
-        for (size_t j = 0; j < config::kVl53l0xMedianCycles - i - 1; ++j) {
+    for (uint8_t i = 0; i + 1 < medianValid; ++i) {
+        for (uint8_t j = 0; j + 1 < medianValid - i; ++j) {
             if (sorted[j] > sorted[j + 1]) {
                 const uint16_t temp = sorted[j];
                 sorted[j] = sorted[j + 1];
@@ -55,20 +65,34 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
             }
         }
     }
-    const uint16_t median = sorted[config::kVl53l0xMedianCycles / 2];
+    // medianValid is always >= 1 here (we just wrote a valid sample above).
+    const uint16_t median = sorted[medianValid / 2];
     medianHistory_[historyIndex_] = median;
 
-    // mean of medians
+    // Mean over the most recent valid medians. Modulus must be the ring
+    // size (kVl53l0xDetectHistoryWindow); the previous code used
+    // kVl53l0xSmoothCycles, which indexed off the end of the 9-slot buffer.
     uint32_t sum = 0;
+    uint8_t smoothValid = 0;
     for (size_t i = 0; i < config::kVl53l0xSmoothCycles; ++i) {
-        sum += medianHistory_[(historyIndex_ + config::kVl53l0xMedianCycles - i) % config::kVl53l0xSmoothCycles];
+        const uint16_t m = medianHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
+                                          config::kVl53l0xDetectHistoryWindow];
+        if (validReading(m)) {
+            sum += m;
+            ++smoothValid;
+        }
     }
-    const uint16_t smoothed = sum / config::kVl53l0xSmoothCycles;
+    const uint16_t smoothed = static_cast<uint16_t>(sum / smoothValid);
     smoothedHistory_[historyIndex_] = smoothed;
+
+    // Defer trend detection until the smoothing window is fully populated
+    // with real data; before that, min/max scans over the ring are biased
+    // by still-empty slots and would produce spurious turning points.
+    const bool warmedUp = (historyCount_ + 1) >= config::kVl53l0xSmoothCycles;
 
     uint32_t potentialTurningPoint = 0;
     auto nowMs = millis();
-    if (turningMs == 0 || (nowMs - turningMs) >= config::kVl53l0xMinStableTimeMs) {
+    if (warmedUp && (turningMs == 0 || (nowMs - turningMs) >= config::kVl53l0xMinStableTimeMs)) {
         // check for trend change every kVl53l0xMinStableTimeMs, to avoid reacting to noise
         if (movingCloser_) {
             for (size_t i = 0; i < historyCount_; ++i) {
@@ -106,19 +130,19 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
             }
         }
 
-        // // Debug info
-        // Serial.print(F("D Raw: "));
-        // Serial.print(distance);
-        // Serial.print(F(" Median: "));
-        // Serial.print(median);
-        // Serial.print(F(" Smoothed: "));
-        // Serial.print(smoothed);
-        // Serial.print(F(" Pt: "));
-        // Serial.print(potentialTurningPoint);
-        // if (reachedMinLatch_) {
-        //     Serial.print(F(" (X)"));
-        // }
-        // Serial.println();
+        // Debug info
+        Serial.print(F("D Raw: "));
+        Serial.print(distance);
+        Serial.print(F(" Median: "));
+        Serial.print(median);
+        Serial.print(F(" Smoothed: "));
+        Serial.print(smoothed);
+        Serial.print(F(" Pt: "));
+        Serial.print(potentialTurningPoint);
+        if (reachedMinLatch_) {
+            Serial.print(F(" (X)"));
+        }
+        Serial.println();
     }
 
     // Update to new index
@@ -141,10 +165,29 @@ void VL53L0XInput::update() {
     distanceMm_ = sensor_.readRangeContinuousMillimeters();
     timeout_ = sensor_.timeoutOccurred();
 
+    // Any unusable sample feeds the same counter: I2C bus timeouts (65535),
+    // the sensor's "signal invalid" sentinel (~8190), or anything past the
+    // plausible range limit. If they keep stacking, the sensor is wedged
+    // (EMI / brownout / bus hang) and only a re-init will unstick it.
     if (timeout_ || !validReading(distanceMm_)) {
+        if (consecutiveBadReads_ < 0xFF) {
+            ++consecutiveBadReads_;
+        }
+        if (consecutiveBadReads_ >= config::kVl53l0xRecoveryTimeouts) {
+            reinit();
+        }
         return;
     }
+    consecutiveBadReads_ = 0;
     insertHistory(distanceMm_);
+}
+
+void VL53L0XInput::reinit() {
+    sensor_.setTimeout(config::kVl53l0xTimeoutMs);
+    if (sensor_.init()) {
+        sensor_.startContinuous(config::kVl53l0xSamplePeriodMs);
+    }
+    resetStates();
 }
 
 bool VL53L0XInput::reachedMin() {
