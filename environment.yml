@@ -6,5 +6,6 @@ dependencies:
   - pip
   - pyserial>=3.5,<4
   - esptool>=4.8,<5
+  - python-dotenv>=0.19
   - pip:
       - python-osc>=1.9,<2

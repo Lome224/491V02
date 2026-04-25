@@ -131,18 +131,18 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         }
 
         // Debug info
-        Serial.print(F("D Raw: "));
-        Serial.print(distance);
-        Serial.print(F(" Median: "));
-        Serial.print(median);
-        Serial.print(F(" Smoothed: "));
-        Serial.print(smoothed);
-        Serial.print(F(" Pt: "));
-        Serial.print(potentialTurningPoint);
-        if (reachedMinLatch_) {
-            Serial.print(F(" (X)"));
-        }
-        Serial.println();
+        // Serial.print(F("D Raw: "));
+        // Serial.print(distance);
+        // Serial.print(F(" Median: "));
+        // Serial.print(median);
+        // Serial.print(F(" Smoothed: "));
+        // Serial.print(smoothed);
+        // Serial.print(F(" Pt: "));
+        // Serial.print(potentialTurningPoint);
+        // if (reachedMinLatch_) {
+        //     Serial.print(F(" (X)"));
+        // }
+        // Serial.println();
     }
 
     // Update to new index

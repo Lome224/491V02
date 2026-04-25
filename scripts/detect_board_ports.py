@@ -11,6 +11,7 @@ when the device moves and you need to update that value.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import re
 import shutil
@@ -124,6 +125,24 @@ def from_arduino_cli() -> list[Port]:
     return ports
 
 
+def from_devfs() -> list[Port]:
+    """Fallback to scanning device nodes directly when helper CLIs are missing."""
+    ports: list[Port] = []
+    seen: set[str] = set()
+    for pattern in ("/dev/cu.*", "/dev/tty.*"):
+        for path in sorted(glob.glob(pattern)):
+            if path in seen:
+                continue
+            seen.add(path)
+            haystack = path.lower()
+            if any(hint in haystack for hint in NON_USB_HINTS):
+                continue
+            if not any(hint in haystack for hint in USB_SERIAL_HINTS):
+                continue
+            ports.append(Port(path=path, sources={"devfs"}))
+    return ports
+
+
 def merge(a: Port, b: Port) -> Port:
     a.sources |= b.sources
     for field_name in ("description", "vid", "pid", "location"):
@@ -134,7 +153,7 @@ def merge(a: Port, b: Port) -> Port:
 
 def collect_ports() -> list[Port]:
     records: dict[str, Port] = {}
-    for port in (*from_pio(), *from_arduino_cli()):
+    for port in (*from_pio(), *from_arduino_cli(), *from_devfs()):
         if not port.path or not port.is_usb_serial:
             continue
         if port.path in records:
@@ -176,7 +195,8 @@ def cmd_list(ports: list[Port]) -> int:
     if not ports:
         print("No USB serial devices detected.")
         print("Check that the Nano is plugged in and the USB cable supports data.")
-        return 1
+        # Listing is informational, so an empty result should not fail `just ports`.
+        return 0
     guess = guess_nano(ports)
     print("USB serial candidates (* = best guess for the Nano):")
     for port in ports:

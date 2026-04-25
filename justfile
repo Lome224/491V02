@@ -5,6 +5,7 @@ project_root := justfile_directory()
 project_env := env_var_or_default("PROJECT_ENV", "lorem-ipsum")
 project_env_file := project_root + "/environment.yml"
 project_requirements := project_root + "/requirements.txt"
+python_env_tool := `if command -v mamba >/dev/null 2>&1; then command -v mamba; elif [ -x /opt/homebrew/bin/mamba ]; then echo /opt/homebrew/bin/mamba; elif command -v conda >/dev/null 2>&1; then command -v conda; elif [ -x /opt/homebrew/bin/conda ]; then echo /opt/homebrew/bin/conda; fi`
 port_detect_script := project_root + "/scripts/detect_board_ports.py"
 serial_monitor_script := project_root + "/scripts/serial_monitor.py"
 serial_default_baud := env_var_or_default("SERIAL_DEFAULT_BAUD", "115200")
@@ -18,24 +19,48 @@ help:
 
 # --- Python environment and app helpers --------------------------------------
 py_setup:
-    @base="$(conda info --base)"; \
-    if [ -d "$base/envs/{{ project_env }}" ]; then \
-      if command -v mamba >/dev/null 2>&1; then mamba env update -f "{{ project_env_file }}" --prune -y; else conda env update -f "{{ project_env_file }}" --prune -y; fi; \
+    @tool="{{ python_env_tool }}"; \
+    if [ -z "$tool" ]; then \
+      echo "Neither mamba nor conda is installed."; \
+      exit 1; \
+    fi; \
+    if "$tool" run -n "{{ project_env }}" python -V >/dev/null 2>&1; then \
+      "$tool" env update -n "{{ project_env }}" -f "{{ project_env_file }}" --prune -y; \
     else \
-      if command -v mamba >/dev/null 2>&1; then mamba env create -f "{{ project_env_file }}" -y; else conda env create -f "{{ project_env_file }}" -y; fi; \
+      "$tool" env create -n "{{ project_env }}" -f "{{ project_env_file }}" -y; \
     fi
 
 py_check:
-    @conda run -n "{{ project_env }}" python -c "import serial; from pythonosc import dispatcher, osc_server, udp_client; print('Python env OK')"
+    @tool="{{ python_env_tool }}"; \
+    if [ -z "$tool" ]; then \
+      echo "Neither mamba nor conda is installed."; \
+      exit 1; \
+    fi; \
+    "$tool" run -n "{{ project_env }}" python -c "import serial; from pythonosc import dispatcher, osc_server, udp_client; print('Python env OK')"
 
 py_master args="":
-    @conda run -n "{{ project_env }}" python src/Master.py {{ args }}
+    @tool="{{ python_env_tool }}"; \
+    if [ -z "$tool" ]; then \
+      echo "Neither mamba nor conda is installed."; \
+      exit 1; \
+    fi; \
+    "$tool" run -n "{{ project_env }}" python src/Master.py {{ args }}
 
 py_osc_server:
-    @conda run -n "{{ project_env }}" python src/osc_server.py
+    @tool="{{ python_env_tool }}"; \
+    if [ -z "$tool" ]; then \
+      echo "Neither mamba nor conda is installed."; \
+      exit 1; \
+    fi; \
+    "$tool" run -n "{{ project_env }}" python src/osc_server.py
 
 pip_install:
-    @python3 -m pip install -r "{{ project_requirements }}"
+    @tool="{{ python_env_tool }}"; \
+    if [ -z "$tool" ]; then \
+      echo "Neither mamba nor conda is installed."; \
+      exit 1; \
+    fi; \
+    "$tool" run -n "{{ project_env }}" python -m pip install -r "{{ project_requirements }}"
 
 # --- Firmware (Arduino Nano) -------------------------------------------------
 
