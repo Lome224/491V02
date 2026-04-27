@@ -23,6 +23,7 @@ class VL53L0XInput {
     void clearTofTimeout() { timeout_ = false; }
     uint16_t distanceMm() const { return distanceMm_; }
     bool reachedMin();
+    bool reachedMax();
 
    private:
     void resetStates();  // internal use only, does not reset the sensor
@@ -33,23 +34,23 @@ class VL53L0XInput {
     VL53L0X sensor_;
     bool initialized_ = false;
     bool timeout_ = false;
+    bool warmup_ = true;  // true until the first valid reading arrives
     uint16_t distanceMm_ = 0;
     uint8_t consecutiveBadReads_ = 0;  // timeouts or out-of-range; both feed recovery
 
-    // Min-detection state
-    uint16_t history_[config::kVl53l0xDetectHistoryWindow] = {};
-    uint16_t medianHistory_[config::kVl53l0xDetectHistoryWindow] =
-        {};  // Median of recent samples, for  stable min detection.
-    uint16_t smoothedHistory_[config::kVl53l0xDetectHistoryWindow] =
-        {};  // Mean of median samples, for stable min detection.
+    // Stability filtering history. Circular buffer of the most recent valid readings, used for median/smoothing and turn-around detection.
+    uint16_t history_[config::kVl53l0xHistoryWindow] = {};
+    uint16_t medianHistory_[config::kVl53l0xHistoryWindow] = {}; 
+    uint16_t smoothedHistory_[config::kVl53l0xHistoryWindow] ={}; 
 
     int lastHistoryIndex_ = -1;
     int historyIndex_ = 0;
-    size_t historyCount_ = 0;
 
     bool movingCloser_ = false;
-    long turningMs = 0;
+    long turningMs_ = 0;
+
     bool reachedMinLatch_ = false;
+    bool reachedMaxLatch_ = false;
 };
 
 }  // namespace motorctl
