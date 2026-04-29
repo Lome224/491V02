@@ -47,10 +47,10 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
     // Median over the most recent valid raw samples. Skipping invalid/empty
     // slots prevents a dropped reading (e.g. a missed sample during EMI)
     // from pulling the median toward zero during warmup or recovery.
-    uint16_t sorted[config::kVl53l0xMedianCycles] = {};
-    uint8_t medianValid = 0;
+    volatile uint16_t sorted[config::kVl53l0xMedianCycles] = {};
+    volatile uint8_t medianValid = 0;
     for (size_t i = 0; i < config::kVl53l0xMedianCycles; ++i) {
-        const uint16_t v = history_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
+        volatile const uint16_t v = history_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
                                     config::kVl53l0xDetectHistoryWindow];
         if (validReading(v)) {
             sorted[medianValid++] = v;
@@ -66,23 +66,23 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         }
     }
     // medianValid is always >= 1 here (we just wrote a valid sample above).
-    const uint16_t median = sorted[medianValid / 2];
+    volatile const uint16_t median = sorted[medianValid / 2];
     medianHistory_[historyIndex_] = median;
 
     // Mean over the most recent valid medians. Modulus must be the ring
     // size (kVl53l0xDetectHistoryWindow); the previous code used
     // kVl53l0xSmoothCycles, which indexed off the end of the 9-slot buffer.
-    uint32_t sum = 0;
+    volatile uint32_t sum = 0;
     uint8_t smoothValid = 0;
     for (size_t i = 0; i < config::kVl53l0xSmoothCycles; ++i) {
-        const uint16_t m = medianHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
+        volatile const uint16_t m = medianHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
                                           config::kVl53l0xDetectHistoryWindow];
         if (validReading(m)) {
             sum += m;
             ++smoothValid;
         }
     }
-    const uint16_t smoothed = static_cast<uint16_t>(sum / smoothValid);
+    volatile const uint16_t smoothed = static_cast<uint16_t>(sum / smoothValid);
     smoothedHistory_[historyIndex_] = smoothed;
 
     // Defer trend detection until the smoothing window is fully populated
@@ -90,7 +90,7 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
     // by still-empty slots and would produce spurious turning points.
     const bool warmedUp = (historyCount_ + 1) >= config::kVl53l0xSmoothCycles;
 
-    uint32_t potentialTurningPoint = 0;
+    volatile uint32_t potentialTurningPoint = 0;
     auto nowMs = millis();
     if (warmedUp && (turningMs == 0 || (nowMs - turningMs) >= config::kVl53l0xMinStableTimeMs)) {
         // check for trend change every kVl53l0xMinStableTimeMs, to avoid reacting to noise

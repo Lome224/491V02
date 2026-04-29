@@ -274,6 +274,7 @@ def main() -> None:
                     # read until newline or timeout, we only need to match first `S state=(running|pause)` line if it exists
                     board_line = ser_board.readline().decode('utf-8').strip()
                     board_tof_mm = -1 # detected distance from board telemetry
+                    board_step = -1   # detected step count from board telemetry
                     board_status = "unknown"
                     if board_line:
                         match = re.match(r"S state=(running|pause)", board_line)
@@ -282,6 +283,9 @@ def main() -> None:
                         match_tof = re.search(r"tof_mm=(\d+)", board_line)
                         if match_tof:
                             board_tof_mm = float(match_tof.group(1))
+                        match_step = re.search(r"step=(\d+)", board_line)
+                        if match_step:
+                            board_step = int(match_step.group(1))
 
                     # read from sensor
                     response = ser_sensor.read(7)
@@ -348,6 +352,7 @@ def main() -> None:
                                 f"jerk={jerk:-10.1f}cm/s³  ",
                                 f"board={board_status:7}  ",
                                 f"tof={board_tof_mm:6.0f}mm  ",
+                                f"step={board_step:6d}  ",
                                 end="   | \r", flush=True
                             )
 

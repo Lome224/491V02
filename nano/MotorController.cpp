@@ -19,7 +19,14 @@ namespace motorctl {
 
 namespace {
 
-constexpr unsigned long kMinStepIntervalUs = 20;      // ISR floor, well below our fastest config
+static_assert(config::kSlowStepIntervalUs >= config::kFastStepIntervalUs,
+              "kSlowStepIntervalUs must be >= kFastStepIntervalUs");
+static_assert(config::kFastStepIntervalUs >= 20,
+              "kFastStepIntervalUs is below the safe Timer1 ISR floor");
+
+constexpr uint8_t kTimer1Stopped = _BV(WGM12);
+constexpr uint8_t kTimer1Running = _BV(WGM12) | _BV(CS11);  // CTC + /8 prescaler
+constexpr unsigned long kMinStepIntervalUs = config::kFastStepIntervalUs;
 constexpr unsigned long kMaxStepIntervalUs = 0xFFFFUL;
 
 bool g_stepTimerRunning = false;
@@ -28,7 +35,7 @@ void configureStepTimer() {
     const uint8_t sreg = SREG;
     cli();
     TCCR1A = 0;                                       // normal port op, no PWM output
-    TCCR1B = _BV(WGM12);                              // CTC (TOP = OCR1A), clock stopped
+    TCCR1B = kTimer1Stopped;                          // CTC (TOP = OCR1A), clock stopped
     TCNT1 = 0;
     OCR1A = static_cast<uint16_t>(kMaxStepIntervalUs);
     TIMSK1 &= ~_BV(OCIE1A);                           // disabled until an interval is set
@@ -36,16 +43,26 @@ void configureStepTimer() {
     SREG = sreg;
 }
 
-void setStepIntervalUs(unsigned long intervalUs) {
+unsigned long clampStepIntervalUs(unsigned long intervalUs) {
     if (intervalUs < kMinStepIntervalUs) {
         intervalUs = kMinStepIntervalUs;
     } else if (intervalUs > kMaxStepIntervalUs) {
         intervalUs = kMaxStepIntervalUs;
     }
+    return intervalUs;
+}
+
+void setStepIntervalUs(unsigned long intervalUs) {
+    intervalUs = clampStepIntervalUs(intervalUs);
     const uint16_t top = static_cast<uint16_t>(intervalUs - 1);
 
     const uint8_t sreg = SREG;
     cli();
+    // Reassert the full Timer1 setup on every update. If any library or
+    // memory upset changes the mode/prescaler while the timer is already
+    // running, OCR1A telemetry can look correct while the physical STEP pin
+    // runs much faster than the configured limit.
+    TCCR1A = 0;
     OCR1A = top;
     if (TCNT1 > top) {
         TCNT1 = 0;                                    // shortening: skip the long wrap cycle
@@ -53,16 +70,17 @@ void setStepIntervalUs(unsigned long intervalUs) {
     if (!g_stepTimerRunning) {
         TIFR1 = _BV(OCF1A);                           // drop any stale compare-match flag
         TIMSK1 |= _BV(OCIE1A);
-        TCCR1B = _BV(WGM12) | _BV(CS11);              // CTC + /8 prescaler → start
         g_stepTimerRunning = true;
     }
+    TCCR1B = kTimer1Running;
     SREG = sreg;
 }
 
 void stopStepTimer() {
     const uint8_t sreg = SREG;
     cli();
-    TCCR1B = _BV(WGM12);                              // stop clock, keep CTC config
+    TCCR1A = 0;
+    TCCR1B = kTimer1Stopped;                          // stop clock, keep CTC config
     TIMSK1 &= ~_BV(OCIE1A);
     g_stepTimerRunning = false;
     PORTD &= ~config::kStepPinMask;                   // idle the step line low
@@ -276,9 +294,10 @@ void MotorController::update(int adc) {
     const float clampedScale = status_.speedScale < 0.05f ? 0.05f : status_.speedScale;
     const unsigned long effectiveIntervalUs =
         static_cast<unsigned long>(smoothedBaseIntervalUs_ / clampedScale);
+    const unsigned long actualIntervalUs = clampStepIntervalUs(effectiveIntervalUs);
 
-    status_.stepsPerSecond = 1000000.0f / static_cast<float>(effectiveIntervalUs);
-    setStepIntervalUs(effectiveIntervalUs);
+    status_.stepsPerSecond = 1000000.0f / static_cast<float>(actualIntervalUs);
+    setStepIntervalUs(actualIntervalUs);
 }
 
 }  // namespace motorctl

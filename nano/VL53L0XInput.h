@@ -37,10 +37,10 @@ class VL53L0XInput {
     uint8_t consecutiveBadReads_ = 0;  // timeouts or out-of-range; both feed recovery
 
     // Min-detection state
-    uint16_t history_[config::kVl53l0xDetectHistoryWindow] = {};
-    uint16_t medianHistory_[config::kVl53l0xDetectHistoryWindow] =
+    volatile uint16_t history_[config::kVl53l0xDetectHistoryWindow] = {};
+    volatile uint16_t medianHistory_[config::kVl53l0xDetectHistoryWindow] =
         {};  // Median of recent samples, for  stable min detection.
-    uint16_t smoothedHistory_[config::kVl53l0xDetectHistoryWindow] =
+    volatile uint16_t smoothedHistory_[config::kVl53l0xDetectHistoryWindow] =
         {};  // Mean of median samples, for stable min detection.
 
     int lastHistoryIndex_ = -1;
