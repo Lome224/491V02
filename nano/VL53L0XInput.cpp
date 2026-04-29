@@ -3,6 +3,7 @@
 #include <Wire.h>
 
 #include "Config.h"
+#include "UnicodeUtils.h"
 
 namespace motorctl {
 
@@ -11,13 +12,12 @@ void VL53L0XInput::resetStates() {
     distanceMm_ = 0;
     lastHistoryIndex_ = -1;
     historyIndex_ = 0;
-    historyCount_ = 0;
     reachedMinLatch_ = false;
     consecutiveBadReads_ = 0;
     movingCloser_ = false;
-    turningMs = 0;
+    turningMs_ = 0;
 
-    for (size_t i = 0; i < config::kVl53l0xDetectHistoryWindow; ++i) {
+    for (size_t i = 0; i < config::kVl53l0xHistoryWindow; ++i) {
         history_[i] = 0;
         medianHistory_[i] = 0;
         smoothedHistory_[i] = 0;
@@ -26,7 +26,8 @@ void VL53L0XInput::resetStates() {
 
 bool VL53L0XInput::begin() {
     Wire.begin();
-    Wire.setClock(100000); // VL53L0X can be picky about I2C timing; 100kHz is more stable than the default 400kHz on Nano
+    Wire.setClock(
+        100000);  // VL53L0X can be picky about I2C timing; 100kHz is more stable than the default 400kHz on Nano
 
     sensor_.setTimeout(config::kVl53l0xTimeoutMs);
     if (!sensor_.init()) {
@@ -42,91 +43,74 @@ bool VL53L0XInput::begin() {
 }
 
 void VL53L0XInput::insertHistory(uint16_t distance) {
+    if (!validReading(distance)) {
+        return;
+    }
+    distance = max(distance, config::kVl53l0xMinClampMm);  // Clamp to minimum to avoid false triggers
+    distance = min(distance, config::kVl53l0xMaxClampMm);  // Clamp to maximum to reject spurious readings
     history_[historyIndex_] = distance;
 
-    // Median over the most recent valid raw samples. Skipping invalid/empty
-    // slots prevents a dropped reading (e.g. a missed sample during EMI)
-    // from pulling the median toward zero during warmup or recovery.
-    volatile uint16_t sorted[config::kVl53l0xMedianCycles] = {};
-    volatile uint8_t medianValid = 0;
-    for (size_t i = 0; i < config::kVl53l0xMedianCycles; ++i) {
-        volatile const uint16_t v = history_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
-                                    config::kVl53l0xDetectHistoryWindow];
-        if (validReading(v)) {
-            sorted[medianValid++] = v;
+    // Median over the most recent valid raw samples.
+    uint16_t median = distance;  // default to the current reading if not enough history
+    if (!warmup_) {
+        uint16_t sorted[config::kVl53l0xMedianCycles] = {};
+        for (size_t i = 0; i < config::kVl53l0xMedianCycles; ++i) {
+            sorted[i] = history_[(historyIndex_ + config::kVl53l0xHistoryWindow - i) % config::kVl53l0xHistoryWindow];
         }
-    }
-    for (uint8_t i = 0; i + 1 < medianValid; ++i) {
-        for (uint8_t j = 0; j + 1 < medianValid - i; ++j) {
-            if (sorted[j] > sorted[j + 1]) {
-                const uint16_t temp = sorted[j];
-                sorted[j] = sorted[j + 1];
-                sorted[j + 1] = temp;
+        for (uint8_t i = 0; i + 1 < config::kVl53l0xMedianCycles; ++i) {
+            for (uint8_t j = 0; j + 1 < config::kVl53l0xMedianCycles - i; ++j) {
+                if (sorted[j] > sorted[j + 1]) {
+                    const uint16_t temp = sorted[j];
+                    sorted[j] = sorted[j + 1];
+                    sorted[j + 1] = temp;
+                }
             }
         }
+        median = sorted[config::kVl53l0xMedianCycles / 2];
     }
-    // medianValid is always >= 1 here (we just wrote a valid sample above).
-    volatile const uint16_t median = sorted[medianValid / 2];
     medianHistory_[historyIndex_] = median;
 
     // Mean over the most recent valid medians. Modulus must be the ring
-    // size (kVl53l0xDetectHistoryWindow); the previous code used
+    // size (kVl53l0xHistoryWindow); the previous code used
     // kVl53l0xSmoothCycles, which indexed off the end of the 9-slot buffer.
-    volatile uint32_t sum = 0;
-    uint8_t smoothValid = 0;
-    for (size_t i = 0; i < config::kVl53l0xSmoothCycles; ++i) {
-        volatile const uint16_t m = medianHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
-                                          config::kVl53l0xDetectHistoryWindow];
-        if (validReading(m)) {
-            sum += m;
-            ++smoothValid;
+    uint16_t mean = median;  // default to the current median if not enough history
+    if (!warmup_) {
+        uint32_t sum = 0;
+        uint8_t smoothValid = 0;
+        for (size_t i = 0; i < config::kVl53l0xSmoothCycles; ++i) {
+            sum += medianHistory_[(historyIndex_ + config::kVl53l0xHistoryWindow - i) % config::kVl53l0xHistoryWindow];
         }
+        mean = static_cast<uint16_t>(sum / config::kVl53l0xSmoothCycles);
     }
-    volatile const uint16_t smoothed = static_cast<uint16_t>(sum / smoothValid);
-    smoothedHistory_[historyIndex_] = smoothed;
+    smoothedHistory_[historyIndex_] = mean;
 
     // Defer trend detection until the smoothing window is fully populated
     // with real data; before that, min/max scans over the ring are biased
     // by still-empty slots and would produce spurious turning points.
-    const bool warmedUp = (historyCount_ + 1) >= config::kVl53l0xSmoothCycles;
-
-    volatile uint32_t potentialTurningPoint = 0;
     auto nowMs = millis();
-    if (warmedUp && (turningMs == 0 || (nowMs - turningMs) >= config::kVl53l0xMinStableTimeMs)) {
+
+    if (!warmup_ && (turningMs_ == 0 || (nowMs - turningMs_) >= config::kVl53l0xMinStableTimeMs)) {
+        uint32_t maxPointMm = 0, minPointMm = 0xFFFF;
+        for (size_t i = 0; i < config::kVl53l0xHistoryWindow; ++i) {
+            const uint16_t candidate =
+                smoothedHistory_[(historyIndex_ + config::kVl53l0xHistoryWindow - i) % config::kVl53l0xHistoryWindow];
+            maxPointMm = max(maxPointMm, candidate);
+            minPointMm = min(minPointMm, candidate);
+        }
         // check for trend change every kVl53l0xMinStableTimeMs, to avoid reacting to noise
         if (movingCloser_) {
-            for (size_t i = 0; i < historyCount_; ++i) {
-                if (!validReading(smoothedHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
-                                                   config::kVl53l0xDetectHistoryWindow])) {
-                    continue;
-                }
-                const uint16_t candidate = smoothedHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
-                                                            config::kVl53l0xDetectHistoryWindow];
-                if (potentialTurningPoint == 0 || candidate < potentialTurningPoint) {
-                    potentialTurningPoint = candidate;
-                }
-            }
-
-            if (potentialTurningPoint != 0 && smoothed > potentialTurningPoint + config::kVl53l0xTrendDeltaMm) {
+            // If distance rises enough after the lowest point, we passed min.
+            if (mean > minPointMm + config::kVl53l0xTrendDeltaMm) {
                 reachedMinLatch_ = true;
                 movingCloser_ = false;
-                turningMs = nowMs;
+                turningMs_ = nowMs;
             }
         } else {
-            for (size_t i = 0; i < historyCount_; ++i) {
-                if (!validReading(smoothedHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
-                                                   config::kVl53l0xDetectHistoryWindow])) {
-                    continue;
-                }
-                const uint16_t candidate = smoothedHistory_[(historyIndex_ + config::kVl53l0xDetectHistoryWindow - i) %
-                                                            config::kVl53l0xDetectHistoryWindow];
-                if (candidate > potentialTurningPoint) {
-                    potentialTurningPoint = candidate;
-                }
-            }
-            if (potentialTurningPoint != 0 && smoothed < potentialTurningPoint - config::kVl53l0xTrendDeltaMm) {
+            // If distance drops enough after the highest point, we passed max.
+            if (mean < maxPointMm - config::kVl53l0xTrendDeltaMm) {
+                reachedMaxLatch_ = true;
                 movingCloser_ = true;
-                turningMs = nowMs;
+                turningMs_ = nowMs;
             }
         }
 
@@ -135,22 +119,33 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         // Serial.print(distance);
         // Serial.print(F(" Median: "));
         // Serial.print(median);
-        // Serial.print(F(" Smoothed: "));
-        // Serial.print(smoothed);
-        // Serial.print(F(" Pt: "));
-        // Serial.print(potentialTurningPoint);
+        // Serial.print(F(" Mean: "));
+        // Serial.print(mean);
+        // Serial.print(F(" Range: ["));
+        // Serial.print(minPointMm);
+        // Serial.print(F(", "));
+        // Serial.print(maxPointMm);
+        // Serial.print(F("]"));
+        // Serial.print(F(" Trend: "));
+        // Serial.print(movingCloser_ ? F("Closer") : F("Away"));
         // if (reachedMinLatch_) {
-        //     Serial.print(F(" (X)"));
+        //     Serial.print(F(" (min) "));
         // }
-        // Serial.println();
+        // if (reachedMaxLatch_) {
+        //     Serial.print(F(" (max) "));
+        // }
+        // if (distance > 50 && distance < 320) {
+        //     printProgressBar(distance, 0, 320, 16);
+        // }
+        Serial.println();
     }
 
     // Update to new index
     lastHistoryIndex_ = historyIndex_;
-    historyIndex_ = (historyIndex_ + 1) % config::kVl53l0xDetectHistoryWindow;
-    if (historyCount_ < config::kVl53l0xDetectHistoryWindow) {
-        ++historyCount_;
-    }
+    historyIndex_ = (historyIndex_ + 1) % config::kVl53l0xHistoryWindow;
+    if (historyIndex_ == 0)
+        warmup_ = false;  // We've wrapped around at least once, so the history is now fully populated with real data
+                          // and trend detection can begin.
 }
 
 bool VL53L0XInput::validReading(uint16_t distance) const {
@@ -170,10 +165,9 @@ void VL53L0XInput::update() {
     // plausible range limit. If they keep stacking, the sensor is wedged
     // (EMI / brownout / bus hang) and only a re-init will unstick it.
     if (timeout_ || !validReading(distanceMm_)) {
-        if (consecutiveBadReads_ < 0xFF) {
+        if (consecutiveBadReads_ < config::kVl53l0xFailBeforeReinit) {
             ++consecutiveBadReads_;
-        }
-        if (consecutiveBadReads_ >= config::kVl53l0xRecoveryTimeouts) {
+        } else if (config::kVl53l0xFailBeforeReinit > 0) {
             reinit();
         }
         return;
@@ -195,4 +189,11 @@ bool VL53L0XInput::reachedMin() {
     reachedMinLatch_ = false;  // auto-clear latch after reading
     return reachedMin;
 }
+
+bool VL53L0XInput::reachedMax() {
+    bool reachedMax = reachedMaxLatch_;
+    reachedMaxLatch_ = false;  // auto-clear latch after reading
+    return reachedMax;
+}
+
 }  // namespace motorctl
