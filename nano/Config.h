@@ -53,7 +53,7 @@ inline constexpr unsigned long kFastStepIntervalUs = 500;   // knob fully CW:  ~
 
 // Random pause duration, picked each time a pause is triggered.
 inline constexpr unsigned long kPauseMinMs = 1000;
-inline constexpr unsigned long kPauseMaxMs = 3500;
+inline constexpr unsigned long kPauseMaxMs = 3000;
 // Ramp-up / ramp-down length around each pause (smoothstep-shaped).
 inline constexpr unsigned long kPauseRampMs = 400;
 // Minimum time we must stay in Running before another pause can trigger.

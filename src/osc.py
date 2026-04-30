@@ -40,7 +40,7 @@ class OscClient:
         /chan3: acceleration  (cm/s², raw computed)
         /chan4: distance_diff (mm,    raw computed)
         /chan5: jerk          (cm/s³, raw computed)
-        /chan6: board status  (0=unknown, 1=running, 2=pause)
+        /chan6: board status  (0=pause, 1=running))
         """
         if not self.initialized:
             return False
