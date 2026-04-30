@@ -139,7 +139,7 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         // if (distance > 50 && distance < 320) {
         //     printProgressBar(distance, 0, 320, 16);
         // }
-        Serial.println();
+        // Serial.println();
     }
 
     // Update to new index
