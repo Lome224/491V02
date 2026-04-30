@@ -48,6 +48,7 @@ class VL53L0XInput {
 
     bool movingCloser_ = false;
     long turningMs_ = 0;
+    uint16_t turningDistanceMm_ = 0; // min when moving closer, max when moving away; used to detect turn-around points for latch triggering
 
     bool reachedMinLatch_ = false;
     bool reachedMaxLatch_ = false;

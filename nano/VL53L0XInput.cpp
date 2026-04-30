@@ -99,15 +99,17 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         }
         // check for trend change every kVl53l0xMinStableTimeMs, to avoid reacting to noise
         if (movingCloser_) {
+            turningDistanceMm_ = min(turningDistanceMm_, minPointMm);
             // If distance rises enough after the lowest point, we passed min.
-            if (mean > minPointMm + config::kVl53l0xTrendDeltaMm) {
+            if (mean > turningDistanceMm_ + config::kVl53l0xTrendDeltaMm) {
                 reachedMinLatch_ = true;
                 movingCloser_ = false;
                 turningMs_ = nowMs;
             }
         } else {
             // If distance drops enough after the highest point, we passed max.
-            if (mean < maxPointMm - config::kVl53l0xTrendDeltaMm) {
+            turningDistanceMm_ = max(turningDistanceMm_, maxPointMm);
+            if (mean < turningDistanceMm_ - config::kVl53l0xTrendDeltaMm) {
                 reachedMaxLatch_ = true;
                 movingCloser_ = true;
                 turningMs_ = nowMs;
