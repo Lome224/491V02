@@ -87,8 +87,11 @@ void handleCommand(const motorctl::ConsoleCommand& command, unsigned long nowMs)
             return;
 
         case motorctl::ConsoleCommandType::Pause:
-            motor.triggerPause();
-            debugConsole.logEvent(F("INFO"), F("bubble press simulated"));
+            if (motor.triggerPause()) {
+                debugConsole.logEvent(F("INFO"), F("pause command simulated"));
+            } else {
+                debugConsole.logEvent(F("INFO"), F("pause command ignored"));
+            }
             requestStatus();
             return;
 
@@ -155,15 +158,15 @@ void loop() {
     // Check button states
     // buttonInput.update();
     // if (buttonInput.consumePress()) {
-    //     motor.triggerPause();
-    //     debugConsole.logEvent(F("INFO"), F("bubble press detected"));
-    //     requestStatus();
+    //     if (motor.triggerPause()) {
+    //         debugConsole.logEvent(F("INFO"), F("bubble press detected"));
+    //         requestStatus();
+    //     }
     // }
 
     // Check tof sensor
     tofInput.update();
-    if (tofInput.reachedMin()) {
-        motor.triggerPause();
+    if (tofInput.reachedMin() && motor.triggerPause()) {
         debugConsole.logEvent(F("INFO"), F("object detected within threshold distance"));
         requestStatus();
     }

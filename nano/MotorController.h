@@ -34,7 +34,7 @@ class MotorController {
     void startRunning();
     void stopRunning();
     void flipDirection();
-    void triggerPause();
+    bool triggerPause();
     // update() is the per-loop motor step: it advances state, updates timing,
     // and emits a STEP pulse when due.
     void update(int adc);

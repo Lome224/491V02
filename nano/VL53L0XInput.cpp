@@ -76,7 +76,6 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
     uint16_t mean = median;  // default to the current median if not enough history
     if (!warmup_) {
         uint32_t sum = 0;
-        uint8_t smoothValid = 0;
         for (size_t i = 0; i < config::kVl53l0xSmoothCycles; ++i) {
             sum += medianHistory_[(historyIndex_ + config::kVl53l0xHistoryWindow - i) % config::kVl53l0xHistoryWindow];
         }
@@ -117,29 +116,31 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         }
 
         // Debug info
-        // Serial.print(F("D Raw: "));
-        // Serial.print(distance);
-        // Serial.print(F(" Median: "));
-        // Serial.print(median);
-        // Serial.print(F(" Mean: "));
-        // Serial.print(mean);
-        // Serial.print(F(" Range: ["));
-        // Serial.print(minPointMm);
-        // Serial.print(F(", "));
-        // Serial.print(maxPointMm);
-        // Serial.print(F("]"));
-        // Serial.print(F(" Trend: "));
-        // Serial.print(movingCloser_ ? F("Closer") : F("Away"));
-        // if (reachedMinLatch_) {
-        //     Serial.print(F(" (min) "));
-        // }
-        // if (reachedMaxLatch_) {
-        //     Serial.print(F(" (max) "));
-        // }
+        Serial.print(F("D Raw: "));
+        Serial.print(distance);
+        Serial.print(F(" Median: "));
+        Serial.print(median);
+        Serial.print(F(" Mean: "));
+        Serial.print(mean);
+        Serial.print(F(" Range: ["));
+        Serial.print(minPointMm);
+        Serial.print(F(", "));
+        Serial.print(maxPointMm);
+        Serial.print(F("]"));
+        Serial.print(F(" Trend: "));
+        Serial.print(movingCloser_ ? F("Closer") : F("Away"));
+        if (reachedMinLatch_) {
+            Serial.print(F(" (min) "));
+        }
+        if (reachedMaxLatch_) {
+            Serial.print(F(" (max) "));
+            // DEBUG clear max latch immediately
+            reachedMaxLatch_ = false;
+        }
         // if (distance > 50 && distance < 320) {
         //     printProgressBar(distance, 0, 320, 16);
         // }
-        // Serial.println();
+        Serial.println();
     }
 
     // Update to new index

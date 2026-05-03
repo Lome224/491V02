@@ -52,13 +52,13 @@ inline constexpr unsigned long kSlowStepIntervalUs = 4000;  // knob fully CCW: ~
 inline constexpr unsigned long kFastStepIntervalUs = 500;   // knob fully CW:  ~2000 steps/s
 
 // Random pause duration, picked each time a pause is triggered.
-inline constexpr unsigned long kPauseMinMs = 1000;
-inline constexpr unsigned long kPauseMaxMs = 3000;
+inline constexpr unsigned long kPauseMinMs = 500;
+inline constexpr unsigned long kPauseMaxMs = 800;
 // Ramp-up / ramp-down length around each pause (smoothstep-shaped).
 inline constexpr unsigned long kPauseRampMs = 400;
 // Minimum time we must stay in Running before another pause can trigger.
 // Prevents a fresh pause from firing right after returning from one.
-inline constexpr unsigned long kPauseMinIntervalMs = 2000;
+inline constexpr unsigned long kPauseMinIntervalMs = 1500;
 
 // IIR time constant for smoothing knob changes while running. Aggressive
 // knob twists slew in over ~3τ instead of lurching. Larger = smoother + laggier.

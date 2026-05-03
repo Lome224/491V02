@@ -178,20 +178,20 @@ void MotorController::flipDirection() {
     enterState(MotorState::RampDown, nowMs);
 }
 
-void MotorController::triggerPause() {
-    if (status_.state == MotorState::Pause || status_.state == MotorState::RampDown) {
-        return;
+bool MotorController::triggerPause() {
+    auto nowMs = millis();
+    if (status_.state != MotorState::Running) {
+        return false;
     }
 
-    auto nowMs = millis();
     // Cooldown: once Running, ignore pause requests until we've been running
     // long enough. Avoids a stale trigger firing right after the last pause.
-    if (status_.state == MotorState::Running &&
-        nowMs - stateStartMs_ < config::kPauseMinIntervalMs) {
-        return;
+    if (nowMs - stateStartMs_ < config::kPauseMinIntervalMs) {
+        return false;
     }
     nextStateDurationMs_ = random(config::kPauseMinMs, config::kPauseMaxMs);
     enterState(MotorState::RampDown, nowMs);
+    return true;
 }
 
 MotorState MotorController::nextState(unsigned long nowMs) const {
