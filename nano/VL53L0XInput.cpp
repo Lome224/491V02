@@ -116,31 +116,31 @@ void VL53L0XInput::insertHistory(uint16_t distance) {
         }
 
         // Debug info
-        Serial.print(F("D Raw: "));
-        Serial.print(distance);
-        Serial.print(F(" Median: "));
-        Serial.print(median);
-        Serial.print(F(" Mean: "));
-        Serial.print(mean);
-        Serial.print(F(" Range: ["));
-        Serial.print(minPointMm);
-        Serial.print(F(", "));
-        Serial.print(maxPointMm);
-        Serial.print(F("]"));
-        Serial.print(F(" Trend: "));
-        Serial.print(movingCloser_ ? F("Closer") : F("Away"));
-        if (reachedMinLatch_) {
-            Serial.print(F(" (min) "));
-        }
-        if (reachedMaxLatch_) {
-            Serial.print(F(" (max) "));
-            // DEBUG clear max latch immediately
-            reachedMaxLatch_ = false;
-        }
-        // if (distance > 50 && distance < 320) {
-        //     printProgressBar(distance, 0, 320, 16);
+        // Serial.print(F("D Raw: "));
+        // Serial.print(distance);
+        // Serial.print(F(" Median: "));
+        // Serial.print(median);
+        // Serial.print(F(" Mean: "));
+        // Serial.print(mean);
+        // Serial.print(F(" Range: ["));
+        // Serial.print(minPointMm);
+        // Serial.print(F(", "));
+        // Serial.print(maxPointMm);
+        // Serial.print(F("]"));
+        // Serial.print(F(" Trend: "));
+        // Serial.print(movingCloser_ ? F("Closer") : F("Away"));
+        // if (reachedMinLatch_) {
+        //     Serial.print(F(" (min) "));
         // }
-        Serial.println();
+        // if (reachedMaxLatch_) {
+        //     Serial.print(F(" (max) "));
+        //     // DEBUG clear max latch immediately
+        //     reachedMaxLatch_ = false;
+        // }
+        // // if (distance > 50 && distance < 320) {
+        // //     printProgressBar(distance, 0, 320, 16);
+        // // }
+        // Serial.println();
     }
 
     // Update to new index
