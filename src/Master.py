@@ -237,6 +237,11 @@ def main() -> None:
                 print("OSC → 127.0.0.1:8000  channels: /chan1 /chan2 /chan3 /chan4 /chan5")
             else:
                 print(f"OSC error: {osc_client.last_error}")
+            osc_anna = OscClient("192.168.1.211", 8000, "/chan")
+            if osc_anna.is_ready:
+                print("OSC Anna → 192.168.1.211:8000  channels: /chan1 /chan2 /chan3 /chan4 /chan5")
+            else:
+                print(f"OSC Anna error: {osc_anna.last_error}")
         except Exception as e:
             print(f"OSC init error: {e}")
 
@@ -381,6 +386,12 @@ def main() -> None:
                                 )
                                 if not osc_success:
                                     print(f"\n[OSC failed] {osc_client.last_error}")
+                                if osc_anna: 
+                                    osc_success = osc_anna.send_distance(
+                                        filtered_distance, speed, acceleration, distance_diff, jerk, board_status_code
+                                    )
+                                    if not osc_success:
+                                        print(f"\n[OSC Anna failed] {osc_anna.last_error}")
 
                             last_distance     = filtered_distance
                             last_speed        = speed

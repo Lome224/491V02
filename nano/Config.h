@@ -52,8 +52,8 @@ inline constexpr unsigned long kSlowStepIntervalUs = 4000;  // knob fully CCW: ~
 inline constexpr unsigned long kFastStepIntervalUs = 500;   // knob fully CW:  ~2000 steps/s
 
 // Random pause duration, picked each time a pause is triggered.
-inline constexpr unsigned long kPauseMinMs = 500;
-inline constexpr unsigned long kPauseMaxMs = 800;
+inline constexpr unsigned long kPauseMinMs = 3000;
+inline constexpr unsigned long kPauseMaxMs = 6000;
 // Ramp-up / ramp-down length around each pause (smoothstep-shaped).
 inline constexpr unsigned long kPauseRampMs = 400;
 // Minimum time we must stay in Running before another pause can trigger.
@@ -90,7 +90,7 @@ inline constexpr uint16_t kVl53l0xFailBeforeReinit =
 inline constexpr uint8_t kVl53l0xHistoryWindow = 21;      // Better to keep a longer history
 inline constexpr uint8_t kVl53l0xMedianCycles = 3;        // median window depth
 inline constexpr uint8_t kVl53l0xSmoothCycles = 3;        // mean-of-medians depth
-inline constexpr uint16_t kVl53l0xTrendDeltaMm = 3;       // mm of margin for turn-around detection
+inline constexpr uint16_t kVl53l0xTrendDeltaMm = 5;       // mm of margin for turn-around detection
 inline constexpr uint16_t kVl53l0xMinStableTimeMs = 200;  // closer/away must persist this long, longer -> more stable
 
 // ---------------------------------------------------------------------------
