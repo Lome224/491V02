@@ -31,7 +31,7 @@ class OscClient:
             self.initialized = False
             self.error = "python-osc library not installed."
 
-    def send_distance(self, distance, speed, acceleration=None, distance_diff=0, jerk=0):
+    def send_distance(self, distance, speed, acceleration=None, distance_diff=0, jerk=0, board=None):
         """Send all values raw — no scaling, no clamping, no unit conversion.
         All scaling happens in Max.
 
@@ -40,6 +40,7 @@ class OscClient:
         /chan3: acceleration  (cm/s², raw computed)
         /chan4: distance_diff (mm,    raw computed)
         /chan5: jerk          (cm/s³, raw computed)
+        /chan6: board status  (0=pause/reset, 1=running))
         """
         if not self.initialized:
             return False
@@ -50,6 +51,7 @@ class OscClient:
             self.client.send_message("/chan3", float(acceleration or 0))
             self.client.send_message("/chan4", float(distance_diff))
             self.client.send_message("/chan5", float(jerk or 0))
+            self.client.send_message("/chan6", int(board) if board is not None else 0)
             return True
         except Exception as e:
             self.error = f"Cannot send OSC message: {e}"

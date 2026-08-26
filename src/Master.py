@@ -22,13 +22,14 @@ Sampling Rate:
 import argparse
 import time
 import csv
-import glob
 import collections
 import serial
+from dotenv import dotenv_values
+import re
 
 from modbus import build_read_distance, parse_distance_response
-from osc import OscClient, has_osc
-from utils import list_serial_ports, detect_system, get_serial_port_example, check_dependencies, print_dependency_errors
+from osc import OscClient
+from utils import detect_system, check_dependencies, print_dependency_errors
 
 system_info = detect_system()
 if system_info["is_raspberry_pi"]:
@@ -128,12 +129,25 @@ def build_filter(args):
         return None
 
 
+def env_int(env_values, name, default):
+    """Read an integer from .env, falling back cleanly when absent."""
+    value = env_values.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        print(f"Warning: ignoring invalid {name}={value!r}; using {default}.")
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     global serial
+    env_values = dotenv_values()
 
     parser = argparse.ArgumentParser(
         description="Read DJLK-2Y sensor via RS485 Modbus RTU with optional filtering.\n"
@@ -141,10 +155,14 @@ def main() -> None:
     )
 
     # Serial
-    parser.add_argument("port", nargs="?",
-        help="Serial port (e.g. /dev/cu.usbserial-XXXXX). Auto-detected if omitted.")
+    parser.add_argument("sensor_port", nargs="?", default=env_values.get("SENSOR_PORT"),
+        help=f"Sensor serial port (default: .env SENSOR_PORT={env_values.get('SENSOR_PORT') or 'unset'}). Use `just ports` to list available ports.")
+    parser.add_argument("board_port", nargs="?", default=env_values.get("BOARD_PORT"),
+        help=f"Board serial port (default: .env BOARD_PORT={env_values.get('BOARD_PORT') or 'unset'}). Use `just ports` to list available ports.")
+    parser.add_argument("--sensor-baud",    type=int,   default=env_int(env_values, "SENSOR_BAUD", 9600), help=f"Sensor baud rate (default: 9600 or .env SENSOR_BAUD={env_values.get('SENSOR_BAUD') or 'unset'})")
+    parser.add_argument("--board-baud",     type=int,   default=env_int(env_values, "BOARD_BAUD", 115200), help=f"Board baud rate (default: 115200 or .env BOARD_BAUD={env_values.get('BOARD_BAUD') or 'unset'})")
+
     parser.add_argument("--slave",   type=int,   default=0x01)
-    parser.add_argument("--baud",    type=int,   default=115200)
     parser.add_argument("--timeout", type=float, default=0.1)
     parser.add_argument("--interval",type=float, default=0.02,
         help="Sampling interval in seconds (default: 0.02 = 50Hz)")
@@ -174,18 +192,20 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Auto-detect serial port
-    if args.port is None:
-        usb_ports = (glob.glob("/dev/cu.usbserial-*") +
-                     glob.glob("/dev/cu.usbmodem-*") +
-                     glob.glob("/dev/ttyUSB*") +
-                     glob.glob("/dev/ttyACM*"))
-        if usb_ports:
-            args.port = usb_ports[0]
-            print(f"Auto-selected port: {args.port}")
-        else:
-            print("Error: No USB serial device found.")
-            return
+    missing_ports = []
+    if not args.sensor_port:
+        missing_ports.append("SENSOR_PORT")
+    if not args.board_port:
+        missing_ports.append("BOARD_PORT")
+    if missing_ports:
+        parser.error(
+            "missing serial port(s): "
+            + ", ".join(missing_ports)
+            + ". Pass them as arguments or set them in .env."
+        )
+
+    print(f"Using SENSOR_PORT {args.sensor_port}")
+    print(f"Using BOARD_PORT {args.board_port}")
 
     # Build filter
     distance_filter = build_filter(args)
@@ -217,14 +237,25 @@ def main() -> None:
                 print("OSC → 127.0.0.1:8000  channels: /chan1 /chan2 /chan3 /chan4 /chan5")
             else:
                 print(f"OSC error: {osc_client.last_error}")
+            osc_anna = OscClient("192.168.1.211", 8000, "/chan")
+            if osc_anna.is_ready:
+                print("OSC Anna → 192.168.1.211:8000  channels: /chan1 /chan2 /chan3 /chan4 /chan5")
+            else:
+                print(f"OSC Anna error: {osc_anna.last_error}")
         except Exception as e:
             print(f"OSC init error: {e}")
 
-    print(f"Opening {args.port} @ {args.baud} baud...")
+    print(f"Opening {args.sensor_port} @ {args.sensor_baud} baud...")
+    print(f"Opening {args.board_port} @ {args.board_baud} baud...")
 
     try:
-        with serial.Serial(args.port, baudrate=args.baud, timeout=args.timeout) as ser:
+        with (serial.Serial(args.sensor_port, baudrate=args.sensor_baud, timeout=args.timeout) as ser_sensor,
+              serial.Serial(args.board_port, baudrate=args.board_baud, timeout=args.timeout) as ser_board):
             print(f"Reading at ~{1/args.interval:.0f}Hz — Ctrl+C to stop\n")
+            # Set nano board telemetry interval (in ms)
+            interval_ms = args.interval * 1000
+            ser_board.write(f"tel interval {interval_ms}\n".encode('utf-8'))
+            ser_board.flush()
 
             last_distance     = None
             last_speed        = None
@@ -236,10 +267,33 @@ def main() -> None:
                 success     = False
 
                 while retry_count < args.retries and not success:
-                    ser.reset_input_buffer()
-                    ser.write(request)
-                    time.sleep(0.05) #hard code, any way to change it
-                    response = ser.read(7)
+
+                    # send requests to both sensor and nano board
+                    ser_board.reset_input_buffer()
+                    ser_board.write(b"status\n")
+                    ser_sensor.reset_input_buffer()
+                    ser_sensor.write(request)
+                    time.sleep(args.interval / 4) # wait a bit before reading to give sensor time to respond
+
+                    # read status from nano board (non-blocking, just to clear any pending messages)
+                    # read until newline or timeout, we only need to match first `S state=(running|pause)` line if it exists
+                    board_line = ser_board.readline().decode('utf-8').strip()
+                    board_tof_mm = -1 # detected distance from board telemetry
+                    board_step = -1   # detected step count from board telemetry
+                    board_status = "unknown"
+                    if board_line:
+                        match = re.match(r"S state=(running|pause)", board_line)
+                        if match:
+                            board_status = match.group(1)
+                        match_tof = re.search(r"tof_mm=(\d+)", board_line)
+                        if match_tof:
+                            board_tof_mm = float(match_tof.group(1))
+                        match_step = re.search(r"step=(\d+)", board_line)
+                        if match_step:
+                            board_step = int(match_step.group(1))
+
+                    # read from sensor
+                    response = ser_sensor.read(7)
 
                     if not response:
                         retry_count += 1
@@ -292,15 +346,19 @@ def main() -> None:
                             distance_diff = abs(filtered_distance - last_distance) if last_distance is not None else 0.0
 
                             # Terminal output
+                            print("\r\033[K", end="")  # Clear line
                             print(
                                 f"[{timestamp}] "
-                                f"raw={raw_distance}mm  "
-                                f"filtered={filtered_distance:.1f}mm  "
-                                f"disp={display_distance:.1f}{unit_str}  "
-                                f"spd={speed:.1f}cm/s  "
-                                f"acc={acceleration:.1f}cm/s²  "
-                                f"jerk={jerk:.1f}cm/s³     ",
-                                end="\r", flush=True
+                                f"raw={raw_distance:6.1f}mm  "
+                                f"filtered={filtered_distance:6.1f}mm  "
+                                f"disp={display_distance:6.1f}{unit_str}  "
+                                f"spd={speed:7.1f}cm/s  "
+                                f"acc={acceleration:7.1f}cm/s²  "
+                                f"jerk={jerk:-10.1f}cm/s³  ",
+                                f"board={board_status:7}  ",
+                                f"tof={board_tof_mm:6.0f}mm  ",
+                                f"step={board_step:6d}  ",
+                                end="   | \r", flush=True
                             )
 
                             # CSV log
@@ -313,13 +371,27 @@ def main() -> None:
                                 ])
                                 log_file.flush()
 
-                            # OSC send — /chan1=filtered dist, /chan2=speed, /chan3=accel, /chan4=diff, /chan5=jerk
+                            # OSC send — 
+                            # /chan1=filtered dist
+                            # /chan2=speed
+                            # /chan3=accel
+                            # /chan4=diff
+                            # /chan5=jerk
+                            # /chan6=board status (0=pause or stop, 1=running)
+
                             if osc_client:
+                                board_status_code = 1 if board_status == "running" else 0
                                 osc_success = osc_client.send_distance(
-                                    filtered_distance, speed, acceleration, distance_diff, jerk
+                                    filtered_distance, speed, acceleration, distance_diff, jerk, board_status_code
                                 )
                                 if not osc_success:
                                     print(f"\n[OSC failed] {osc_client.last_error}")
+                                if osc_anna: 
+                                    osc_success = osc_anna.send_distance(
+                                        filtered_distance, speed, acceleration, distance_diff, jerk, board_status_code
+                                    )
+                                    if not osc_success:
+                                        print(f"\n[OSC Anna failed] {osc_anna.last_error}")
 
                             last_distance     = filtered_distance
                             last_speed        = speed
